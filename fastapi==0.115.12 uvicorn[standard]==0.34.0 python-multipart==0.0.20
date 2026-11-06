@@ -1,0 +1,17 @@
+
+Monu-AI-Voice-Editor-Python/
+│
+├── main.py
+├── app.py
+├── buildozer.spec
+├── README.md
+├── requirements.txt
+├── MODEL_WORKER_PLAN.md
+│
+├── server/
+│   ├── app.py
+│   └── requirements.txt
+│
+└── .github/
+    └── workflows/
+        └── build-android.yml
