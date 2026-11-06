@@ -1,0 +1,252 @@
+import os
+import uuid
+import shutil
+from pathlib import Path
+
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    Form,
+    HTTPException
+)
+
+# -------------------------------------------------
+# Application settings
+# -------------------------------------------------
+
+APP_NAME = "Monu AI Voice Editor API"
+APP_VERSION = "0.2.0"
+
+DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
+
+UPLOAD_DIR = DATA_DIR / "uploads"
+PROFILE_DIR = DATA_DIR / "profiles"
+OUTPUT_DIR = DATA_DIR / "outputs"
+
+for folder in (UPLOAD_DIR, PROFILE_DIR, OUTPUT_DIR):
+    folder.mkdir(parents=True, exist_ok=True)
+
+app = FastAPI(
+    title=APP_NAME,
+    version=APP_VERSION,
+    description="Private voice conversion API for authorized voice owners."
+)
+
+# -------------------------------------------------
+# Basic configuration
+# -------------------------------------------------
+
+MAX_AUDIO_SIZE = 50 * 1024 * 1024
+MAX_VIDEO_SIZE = 500 * 1024 * 1024
+
+AUDIO_EXTENSIONS = {
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".flac"
+}
+
+VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mov",
+    ".mkv"
+}
+
+
+async def save_upload(
+    upload: UploadFile,
+    destination: Path,
+    max_size: int
+):
+    total_size = 0
+    chunk_size = 1024 * 1024
+
+    try:
+        with destination.open("wb") as output:
+            while True:
+                chunk = await upload.read(chunk_size)
+
+                if not chunk:
+                    break
+
+                total_size += len(chunk)
+
+                if total_size > max_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Uploaded file is too large."
+                    )
+
+                output.write(chunk)
+
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+
+    finally:
+        await upload.close()
+
+    return total_size
+
+
+def check_consent(consent: str):
+    if consent.lower().strip() != "true":
+        raise HTTPException(
+            status_code=400,
+            detail="Voice-owner consent is required."
+        )
+
+
+# -------------------------------------------------
+# Health check
+# -------------------------------------------------
+
+@app.get("/")
+def home():
+    return {
+        "app": APP_NAME,
+        "version": APP_VERSION,
+        "status": "running"
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "ok": True,
+        "api": "online",
+        "voice_model_ready": False,
+        "conversion_ready": False,
+        "message": "RVC worker is not connected yet."
+    }
+
+
+# -------------------------------------------------
+# Create voice profile
+# -------------------------------------------------
+
+@app.post("/v1/voice-profiles")
+async def create_voice_profile(
+    audio: UploadFile = File(...),
+    consent: str = Form(...)
+):
+    check_consent(consent)
+
+    extension = Path(
+        audio.filename or "sample.wav"
+    ).suffix.lower()
+
+    if extension not in AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported audio format."
+        )
+
+    profile_id = str(uuid.uuid4())
+
+    file_path = PROFILE_DIR / (
+        profile_id + extension
+    )
+
+    size = await save_upload(
+        audio,
+        file_path,
+        MAX_AUDIO_SIZE
+    )
+
+    # IMPORTANT:
+    # Uploading a sample does not train an RVC model.
+    # A separate authorized GPU training worker is required.
+
+    return {
+        "profile_id": profile_id,
+        "status": "uploaded_model_not_trained",
+        "file_size": size,
+        "message": (
+            "Voice sample uploaded. "
+            "RVC model training is not connected yet."
+        )
+    }
+
+
+# -------------------------------------------------
+# Submit video conversion job
+# -------------------------------------------------
+
+@app.post("/v1/conversions")
+async def create_conversion(
+    video: UploadFile = File(...),
+    profile_id: str = Form(...),
+    mode: str = Form("voice_conversion"),
+    preserve_timing: str = Form("true"),
+    consent: str = Form(...)
+):
+    check_consent(consent)
+
+    if not profile_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="A valid voice profile ID is required."
+        )
+
+    extension = Path(
+        video.filename or "video.mp4"
+    ).suffix.lower()
+
+    if extension not in VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported video format."
+        )
+
+    job_id = str(uuid.uuid4())
+
+    file_path = UPLOAD_DIR / (
+        job_id + extension
+    )
+
+    size = await save_upload(
+        video,
+        file_path,
+        MAX_VIDEO_SIZE
+    )
+
+    # TODO:
+    # 1. Verify profile ownership.
+    # 2. Extract audio with FFmpeg.
+    # 3. Run RVC inference on an authorized GPU worker.
+    # 4. Mux converted audio into the original video.
+    # 5. Save final MP4 and update job status.
+
+    return {
+        "job_id": job_id,
+        "profile_id": profile_id,
+        "status": "queued_model_not_connected",
+        "file_size": size,
+        "mode": mode,
+        "preserve_timing": preserve_timing,
+        "message": (
+            "Video uploaded. "
+            "GPU voice conversion worker is not connected yet."
+        )
+    }
+
+
+# -------------------------------------------------
+# Check conversion job
+# -------------------------------------------------
+
+@app.get("/v1/jobs/{job_id}")
+def get_job_status(job_id: str):
+
+    return {
+        "job_id": job_id,
+        "status": "model_worker_not_connected",
+        "progress": 0,
+        "output_url": None,
+        "message": (
+            "The RVC and FFmpeg processing pipeline "
+            "must be connected before conversion."
+        )
+    }
